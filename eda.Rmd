@@ -1,0 +1,127 @@
+---
+title: "Rivers"
+author: "Conor Tompkins"
+date: "11/12/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      wawarning = FALSE,
+                      message = FALSE)
+```
+
+```{r}
+library(tidyverse)
+library(sf)
+library(tigris)
+library(tidycensus)
+library(tidygraph)
+library(ggraph)
+library(janitor)
+```
+
+```{r}
+df <- read_csv("https://lehd.ces.census.gov/data/lodes/LODES7/pa/od/pa_od_main_JT00_2017.csv.gz",
+               #n_max = 5000,
+               col_types = cols(.default = "c")) %>% 
+  clean_names() %>% 
+  mutate(s000 = as.numeric(s000)) %>% 
+  select(h_geocode, w_geocode, s000)
+
+geo_crosswalk <- read_csv("https://lehd.ces.census.gov/data/lodes/LODES7/pa/pa_xwalk.csv.gz",
+                          col_types = cols(.default = "c"))
+
+df_tracts_summarized <- df %>% 
+  group_by(h_geocode, w_geocode) %>% 
+  summarize(commuters = sum(s000)) %>% 
+  ungroup() %>% 
+  arrange(desc(commuters))
+
+df_tracts_summarized <- df_tracts_summarized %>% 
+  left_join(geo_crosswalk %>% select(tabblk2010, trct), by = c("h_geocode" = "tabblk2010")) %>% 
+  rename(h_tract = trct) %>% 
+  left_join(geo_crosswalk %>% select(tabblk2010, trct), by = c("w_geocode" = "tabblk2010")) %>% 
+  rename(w_tract = trct)
+
+df_tracts_summarized <- df_tracts_summarized %>% 
+  group_by(h_tract, w_tract) %>% 
+  summarize(commuters = sum(commuters)) %>% 
+  ungroup() %>% 
+  arrange(desc(commuters))
+```
+
+```{r}
+census_api_key("a16f3636406d2b544871e2ae49bb318c3ddcacba")
+allegheny_tracts <- get_decennial(geography = "tract",
+                           variables = c(total_pop = "P001001"),
+                           state = "PA",
+                           county = "Allegheny County",
+                           geometry = TRUE,
+                           output = "wide")
+
+allegheny_tracts_centroids <- cbind(allegheny_tracts,
+                                    st_coordinates(st_centroid(allegheny_tracts))) %>% 
+  st_set_geometry(NULL) %>% 
+  as_tibble() %>% 
+  rename(x = X,
+         y = Y) %>% 
+  select(GEOID, x, y)
+```
+
+```{r}
+df_tracts_summarized <- df_tracts_summarized %>% 
+  #semi_join(allegheny_tracts, by = c("h_tract" = "GEOID")) %>% 
+  semi_join(allegheny_tracts, by = c("w_tract" = "GEOID"))
+
+df_tracts_summarized <- df_tracts_summarized %>% 
+  arrange(h_tract) %>% 
+  na.omit() %>% 
+  filter(!(h_tract == w_tract))
+```
+
+```{r}
+rivers <- st_read("data/USA_Rivers_and_Streams.shp")
+```
+```{r}
+rivers %>% 
+  ggplot() +
+    geom_sf()
+```
+
+
+
+```{r}
+g <- df_tracts_summarized %>% 
+  as_tbl_graph(directed = TRUE)
+
+g
+
+node_pos <- allegheny_tracts_centroids
+
+manual_layout <- create_layout(graph = g,
+                               layout = node_pos)
+```
+
+```{r}
+rivers %>% 
+  ggplot() +
+    geom_sf() +
+    geom_point(data = allegheny_tracts_centroids, aes(x, y), size = .3)
+```
+
+```{r}
+ggraph(manual_layout) +
+  geom_sf(data = allegheny_tracts, color = "dark grey", fill = NA) +
+  geom_sf(data = rivers) +
+  geom_node_point(alpha = 0) +
+  geom_edge_link()
+  geom_edge_fan(aes(edge_width = commuters, 
+                    edge_alpha = commuters),
+                arrow = arrow(length = unit(.5, 'lines')), 
+                start_cap = circle(.1, 'lines'),
+                end_cap = circle(.2, 'lines'),
+                color = "white",
+                strength = .5)
+
+```
