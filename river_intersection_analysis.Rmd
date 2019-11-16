@@ -1,0 +1,265 @@
+---
+title: "eda2"
+author: "Conor Tompkins"
+date: "11/15/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      message = FALSE,
+                      warning = FALSE)
+```
+In my analysis I use many of the standard tidyverse packages, sf, tidygraph, and ggraph.
+```{r}
+library(tidyverse)
+library(sf)
+library(tigris)
+library(tidycensus)
+library(tidygraph)
+library(ggraph)
+```
+
+```{r include=FALSE}
+Sys.getenv("CENSUS_API_KEY")
+options(tigris_use_cache = TRUE)
+```
+
+The first step is to read in the geographies crosswalk and the census tract geographies.
+```{r}
+geo_crosswalk <- read_csv("data/pa_xwalk.csv.gz", col_types = cols(.default = "c"))
+
+allegheny_tracts <- get_decennial(geography = "tract",
+                           variables = c(total_pop = "P001001"),
+                           state = "PA",
+                           county = "Allegheny County",
+                           geometry = TRUE,
+                           output = "wide")
+
+rivers <- st_read("data/USA_Rivers_and_Streams.shp") %>% 
+  group_by(NAME) %>% 
+  summarize() %>% 
+  filter(!(str_detect(NAME,"Chartiers")))
+rivers
+
+rivers %>% 
+  #filter(NAME == "Ohio River") %>% 
+  ggplot() +
+    geom_sf(aes(color = NAME), show.legend = FALSE) +
+    geom_sf_label(aes(label = NAME, fill = NAME)) +
+    theme_graph()
+#st_difference(allegheny_tracts, rivers) %>% 
+#  ggplot() +
+#    geom_sf(fill = "black")
+
+#allegheny_tracts <- st_erase(allegheny_water, allegheny_tracts)
+
+```
+
+This shows the outlines of the tracts used in the analysis.
+```{r}
+allegheny_tracts %>% 
+  ggplot() +
+    geom_sf()
+```
+
+The crosswalk file contains keys to join a variety of geographies.
+```{r}
+geo_crosswalk
+```
+
+Next I read in the main LODES data. This is a big file, so it takes a moment.
+```{r}
+df <- read_csv("data/pa_od_main_JT00_2015.csv.gz", col_types = cols(.default = "c")) %>% 
+  mutate(S000 = as.numeric(S000)) %>% 
+  select(h_geocode, w_geocode, S000)
+
+df
+```
+
+Next I summarize the number of commuters per home-work tract combination. The original file uses census block codes, which are too granular for this analysis. I link the blocks to census tracts and aggregate to that level.
+```{r}
+df_tracts_summarized <- df %>% 
+  group_by(h_geocode, w_geocode) %>% 
+  summarize(commuters = sum(S000)) %>% 
+  ungroup() %>% 
+  arrange(desc(commuters))
+
+df_tracts_summarized <- df_tracts_summarized %>% 
+  left_join(geo_crosswalk %>% select(tabblk2010, trct), by = c("h_geocode" = "tabblk2010")) %>% 
+  rename(h_tract = trct) %>% 
+  left_join(geo_crosswalk %>% select(tabblk2010, trct), by = c("w_geocode" = "tabblk2010")) %>% 
+  rename(w_tract = trct)
+
+df_tracts_summarized <- df_tracts_summarized %>% 
+  group_by(h_tract, w_tract) %>% 
+  summarize(commuters = sum(commuters)) %>% 
+  ungroup() %>% 
+  arrange(desc(commuters))
+
+df_tracts_summarized <- df_tracts_summarized %>% 
+  semi_join(allegheny_tracts, by = c("h_tract" = "GEOID")) %>% 
+  semi_join(allegheny_tracts, by = c("w_tract" = "GEOID"))
+```
+
+This code removes rows where the commuter lives and works in the same tract.
+```{r}
+df_tracts_summarized <- df_tracts_summarized %>% 
+  arrange(h_tract) %>% 
+  na.omit() %>% 
+  filter(!(h_tract == w_tract))
+```
+
+This code finds the center of each tract, which I use as the nodes in the network plots.
+```{r}
+allegheny_tracts <- allegheny_tracts %>% 
+  arrange(GEOID)
+
+allegheny_tracts_centroids <- cbind(allegheny_tracts,
+                                    st_coordinates(st_centroid(allegheny_tracts))) %>% 
+  st_set_geometry(NULL) %>% 
+  as_tibble() %>% 
+  rename(x = X,
+         y = Y) %>% 
+  select(GEOID, x, y)
+```
+
+This shows that the centroids correctly appear in the center of each tract.
+```{r}
+allegheny_tracts %>% 
+  ggplot() +
+    geom_sf() +
+    geom_point(data = allegheny_tracts_centroids, aes(x, y), size = .2) +
+    geom_sf(data = rivers, aes(color = NAME))
+```
+
+```{r}
+g <- df_tracts_summarized %>% 
+  as_tbl_graph(directed = TRUE) %>% 
+  activate(edges) %>% 
+  filter(commuters > 100)
+
+g
+```
+
+```{r}
+node_pos <- allegheny_tracts_centroids
+
+manual_layout <- create_layout(graph = g,
+                               layout = node_pos)
+```
+```{r echo=FALSE}
+manual_layout %>% 
+  as_tibble()
+```
+
+```{r}
+ggraph(manual_layout) +
+  geom_sf(data = allegheny_tracts, color = "dark grey", fill = NA) +
+  geom_sf(data = rivers, aes(color = NAME), show.legend = FALSE) +
+  #geom_node_point(alpha = 0) +
+  geom_edge_fan(aes(edge_width = commuters, 
+                    edge_alpha = commuters),
+                arrow = arrow(length = unit(.5, 'lines')), 
+                start_cap = circle(.1, 'lines'),
+                end_cap = circle(.2, 'lines'),
+                color = "white",
+                strength = .5) +
+  scale_edge_width_continuous(range = c(.1, 1.5)) +
+  scale_edge_alpha_continuous(range = c(.1, .8)) +
+  #scale_fill_viridis_c() +
+  labs(x = NULL,
+       y = NULL,
+       title = "Where do people commute from/to for work?",
+       subtitle = "Excludes within-tract commuters",
+       caption = "Based on 2015 US Census LODES dataset | @conor_tompkins") +
+  theme_graph() +
+  theme(legend.background = element_rect(fill = "light grey"),
+        legend.text = element_text(color = "black"),
+        legend.title = element_text(color = "black"),
+        panel.background = element_rect(fill = "black"))
+```
+
+```{r}
+allegheny_lines <- cbind(allegheny_tracts, st_coordinates(st_centroid(allegheny_tracts))) %>% 
+  select(-c(NAME, total_pop)) %>% 
+  st_drop_geometry()
+
+allegheny_lines %>% 
+  ggplot() +
+    geom_point(aes(X, Y))
+```
+
+```{r}
+df_edges <- g %>% 
+  activate(edges) %>% 
+  as_tibble()
+
+df_nodes <- g %>% 
+  activate(nodes) %>% 
+  as_tibble() %>% 
+  mutate(id = row_number())
+```
+
+```{r}
+df_lines <- df_edges %>% 
+  mutate(line_id = row_number()) %>% 
+  pivot_longer(c(from, to), names_to = "point_type", values_to = "edge_id")
+
+df_lines <- df_lines %>% 
+  left_join(df_nodes, by = c("edge_id" = "id")) %>% 
+  left_join(allegheny_lines, by = c("name" = "GEOID")) %>% 
+  st_as_sf(coords = c("X", "Y")) %>% 
+  group_by(line_id) %>%
+  summarise() %>% # union points into lines using our created lineid
+  st_cast("LINESTRING")
+```
+
+```{r}
+df_lines <- df_lines %>% 
+  st_set_crs(4326)
+rivers <- rivers %>% 
+  st_set_crs(4326)
+
+df_lines
+rivers
+
+df_lines %>% 
+  ggplot() +
+    geom_sf() +
+    geom_sf(data = rivers)
+
+df_lines <- df_lines %>% 
+  mutate(intersects_ohio = st_intersects(., rivers %>% 
+                                            filter(NAME == "Ohio River")) %>% as.logical(),
+         intersects_allegheny = st_intersects(., rivers %>% 
+                                                filter(NAME == "Allegheny River")) %>% as.logical(),
+         intersects_monongahela = st_intersects(., rivers %>% 
+                                                  filter(NAME == "Monongahela River")) %>% as.logical())
+df_commuter_rivers <- df_lines %>% 
+  pivot_longer(c(contains("intersects")), names_to = "river_intersected", values_to = "value") %>% 
+  mutate(value = case_when(is.na(value) ~ FALSE,
+                           !is.na(value) ~ value))
+
+df_commuter_rivers %>% 
+  ggplot() +
+    geom_sf(data = allegheny_tracts, color = NA, show.legend = FALSE) +
+    geom_sf(data = rivers, show.legend = FALSE) +
+    geom_sf(aes(geometry = geometry, color = value), show.legend = TRUE) +
+    facet_wrap(~river_intersected) +
+    theme_graph()
+```
+
+```{r}
+df_commuter_rivers %>% 
+  group_by(line_id) %>% 
+  summarize(rivers_crossed = sum(value)) %>% 
+  arrange(desc(rivers_crossed)) %>% 
+  ggplot(aes(rivers_crossed)) +
+    geom_histogram()
+```
+
+```{r}
+#need to get commuters column into df_commuter_rivers
+```
+
