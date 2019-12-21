@@ -22,7 +22,8 @@ library(ggraph)
 
 ```{r include=FALSE}
 Sys.getenv("CENSUS_API_KEY")
-options(tigris_use_cache = TRUE)
+options(tigris_use_cache = TRUE,
+        readr.show_progress = FALSE)
 ```
 
 The first step is to read in the geographies crosswalk and the census tract geographies.
@@ -210,7 +211,7 @@ df_lines <- df_lines %>%
   left_join(df_nodes, by = c("edge_id" = "id")) %>% 
   left_join(allegheny_lines, by = c("name" = "GEOID")) %>% 
   st_as_sf(coords = c("X", "Y")) %>% 
-  group_by(line_id) %>%
+  group_by(line_id, commuters) %>%
   summarise() %>% # union points into lines using our created lineid
   st_cast("LINESTRING")
 ```
@@ -218,24 +219,35 @@ df_lines <- df_lines %>%
 ```{r}
 df_lines <- df_lines %>% 
   st_set_crs(4326)
+
 rivers <- rivers %>% 
   st_set_crs(4326)
 
 df_lines
 rivers
+```
 
+```{r}
 df_lines %>% 
   ggplot() +
-    geom_sf() +
-    geom_sf(data = rivers)
-
+    geom_sf(aes(size = commuters,
+                alpha = commuters)) +
+    geom_sf(data = rivers,
+            aes(color = NAME),
+            size = 3) +
+    scale_size_continuous(range = c(.1, 1)) +
+    scale_alpha_continuous(range = c(.1, 1))
+```
+```{r}
 df_lines <- df_lines %>% 
+  ungroup() %>% 
   mutate(intersects_ohio = st_intersects(., rivers %>% 
                                             filter(NAME == "Ohio River")) %>% as.logical(),
          intersects_allegheny = st_intersects(., rivers %>% 
                                                 filter(NAME == "Allegheny River")) %>% as.logical(),
          intersects_monongahela = st_intersects(., rivers %>% 
                                                   filter(NAME == "Monongahela River")) %>% as.logical())
+
 df_commuter_rivers <- df_lines %>% 
   pivot_longer(c(contains("intersects")), names_to = "river_intersected", values_to = "value") %>% 
   mutate(value = case_when(is.na(value) ~ FALSE,
@@ -245,21 +257,28 @@ df_commuter_rivers %>%
   ggplot() +
     geom_sf(data = allegheny_tracts, color = NA, show.legend = FALSE) +
     geom_sf(data = rivers, show.legend = FALSE) +
-    geom_sf(aes(geometry = geometry, color = value), show.legend = TRUE) +
+    geom_sf(aes(geometry = geometry, 
+                color = value,
+                size = commuters),
+            show.legend = TRUE) +
     facet_wrap(~river_intersected) +
-    theme_graph()
+    theme_graph() +
+    scale_size_continuous(range = c(.1, .5))
 ```
 
 ```{r}
-df_commuter_rivers %>% 
+df_commuter_rivers_summary <- df_commuter_rivers %>% 
   group_by(line_id) %>% 
-  summarize(rivers_crossed = sum(value)) %>% 
-  arrange(desc(rivers_crossed)) %>% 
-  ggplot(aes(rivers_crossed)) +
-    geom_histogram()
+  summarize(rivers_crossed = sum(value),
+            commuters = sum(commuters))
+
+df_commuter_rivers_summary %>% 
+  ggplot(aes(rivers_crossed, commuters)) +
+    geom_jitter(width = .2) +
+    theme_bw()
 ```
 
 ```{r}
-#need to get commuters column into df_commuter_rivers
+#make chloropleth 
 ```
 
