@@ -239,6 +239,8 @@ df_lines %>%
     scale_alpha_continuous(range = c(.1, 1))
 ```
 ```{r}
+#geom_sf is not accepting alpha as an aesthetic
+
 df_lines <- df_lines %>% 
   ungroup() %>% 
   mutate(intersects_ohio = st_intersects(., rivers %>% 
@@ -279,6 +281,93 @@ df_commuter_rivers_summary %>%
 ```
 
 ```{r}
-#make chloropleth 
+#make chloropleth
+df_lines_chloro <- df_edges %>% 
+  mutate(line_id = row_number()) %>% 
+  pivot_longer(c(from, to), names_to = "point_type", values_to = "edge_id")
+df_lines_chloro
+```  
+```{r}
+#  left_join(df_nodes %>% rename(from_name = name), by = c("from" = "id")) %>% 
+#  left_join(df_nodes %>% rename(to_name = name), by = c("to" = "id")) %>% 
+#  left_join(allegheny_lines %>% rename_all(~str_c("from_", .)), by = c("from_name" = "from_GEOID")) %>% 
+#  left_join(allegheny_lines %>% rename_all(~str_c("to_", .)), by = c("to_name" = "to_GEOID"))
 ```
+```{r}
+#  pivot_longer(-c(line_id, commuters), names_to = c("edge_id", "geoid", "x_id", "y_id"), names_sep = "_")
+  
+  
+#  pivot_longer(c(from, to), names_to = "edge_type", values_to = "edge_id") %>%
+#  pivot_longer(c(from_name, to_name), names_to = "geoid_type", values_to = "geoid_name") %>% 
+#  pivot_longer(c(from_X, to_X), names_to = "location_x_type", values_to = "location_x") %>% 
+#  pivot_longer(c(from_Y, to_Y), names_to = "location_y_type", values_to = "location_y")
+
+#df_lines_chloro
+```
+```{r}
+df_lines_chloro <- df_lines_chloro %>% 
+  left_join(df_nodes, by = c("edge_id" = "id")) %>% 
+  left_join(allegheny_lines, by = c("name" = "GEOID"))
+
+df_lines_chloro_wide <- df_lines_chloro %>% 
+  select(line_id, point_type, name) %>% 
+  pivot_wider(names_from = point_type, values_from = name)
+```
+```{r}
+df_lines_chloro_line <- df_lines_chloro %>% 
+  st_as_sf(coords = c("X", "Y")) %>% 
+  group_by(line_id, commuters) %>%
+  summarise() %>% # union points into lines using our created lineid
+  st_cast("LINESTRING")
+
+df_lines_chloro_line
+```
+```{r}
+df_lines_chloro_line <- df_lines_chloro_line %>% 
+  st_set_crs(4326)
+
+rivers <- rivers %>% 
+  st_set_crs(4326)
+```
+
+```{r}
+df_chloro_wide <- df_lines_chloro_line %>% 
+  ungroup() %>% 
+  left_join(df_lines_chloro_wide) %>% 
+  mutate(intersects_ohio = st_intersects(., rivers %>% 
+                                            filter(NAME == "Ohio River")) %>% as.logical(),
+         intersects_allegheny = st_intersects(., rivers %>% 
+                                                filter(NAME == "Allegheny River")) %>% as.logical(),
+         intersects_monongahela = st_intersects(., rivers %>% 
+                                                  filter(NAME == "Monongahela River")) %>% as.logical()) %>% 
+  st_set_geometry(NULL)
+
+df_chloro_wide
+
+df_chloro_wide <- df_chloro_wide %>% 
+  pivot_longer(c(contains("intersects")), names_to = "river_intersected", values_to = "value") %>% 
+  mutate(value = case_when(is.na(value) ~ FALSE,
+                           !is.na(value) ~ value)) %>% 
+  group_by(from, to, line_id, commuters) %>% 
+  summarize(rivers_intersected = sum(value)) %>% 
+  #arrange(desc(commuters_from)) %>% 
+  right_join(allegheny_tracts, by = c("from" = "GEOID")) #%>% 
+  #filter(!is.na(rivers_intersected))
+
+test <- df_chloro_wide %>% 
+  arrange(from, rivers_intersected, desc(commuters)) %>% 
+  group_by(from) %>% 
+  slice(1)
+```
+```{r}
+test %>% 
+  ggplot() +
+    geom_sf(aes(geometry = geometry,
+                fill = as.factor(rivers_intersected),
+                alpha = commuters)) +
+  scale_alpha_continuous(range = c(.8, 1)) +
+  scale_fill_viridis_d()
+```
+
+
 
