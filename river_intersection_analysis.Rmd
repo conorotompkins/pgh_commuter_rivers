@@ -104,7 +104,7 @@ df_tracts_summarized <- df_tracts_summarized %>%
 ```
 
 This code removes rows where the commuter lives and works in the same tract.
-```{r}
+```{r eval = FALSE}
 df_tracts_summarized <- df_tracts_summarized %>% 
   arrange(h_tract) %>% 
   na.omit() %>% 
@@ -138,7 +138,7 @@ allegheny_tracts %>%
 g <- df_tracts_summarized %>% 
   as_tbl_graph(directed = TRUE) %>% 
   activate(edges) %>% 
-  filter(commuters > 100)
+  filter(commuters > 25)
 
 g
 ```
@@ -167,7 +167,7 @@ ggraph(manual_layout) +
                 color = "white",
                 strength = .5) +
   scale_edge_width_continuous(range = c(.1, 1.5)) +
-  scale_edge_alpha_continuous(range = c(.1, .8)) +
+  scale_edge_alpha_continuous(range = c(.1, .5)) +
   #scale_fill_viridis_c() +
   labs(x = NULL,
        y = NULL,
@@ -207,41 +207,76 @@ df_lines <- df_edges %>%
   mutate(line_id = row_number()) %>% 
   pivot_longer(c(from, to), names_to = "point_type", values_to = "edge_id")
 
-df_lines <- df_lines %>% 
+df_lines
+```
+```{r}
+df_line_types <- df_lines %>% 
+  #select(line_id, point_type, edge_id) %>% 
+  pivot_wider(names_from = point_type, values_from = edge_id) %>% 
+  mutate(line_type = case_when(from == to ~ "point",
+                               from != to ~ "linestring")) %>% 
+  pivot_longer(cols = c(from, to), names_to = "edge_type", values_to = "edge_id")
+df_line_types
+```
+
+```{r}
+df_linestrings <- df_line_types %>% 
+  filter(line_type == "linestring")
+
+df_points <- df_line_types %>% 
+  filter(line_type == "point")
+```
+
+```{r}
+df_linestrings <- df_linestrings %>% 
   left_join(df_nodes, by = c("edge_id" = "id")) %>% 
   left_join(allegheny_lines, by = c("name" = "GEOID")) %>% 
   st_as_sf(coords = c("X", "Y")) %>% 
   group_by(line_id, commuters) %>%
   summarise() %>% # union points into lines using our created lineid
-  st_cast("LINESTRING")
+  st_cast("LINESTRING") %>% 
+  st_set_crs(4326)
+
+df_points <- df_points %>% 
+  left_join(df_nodes, by = c("edge_id" = "id")) %>% 
+  left_join(allegheny_lines, by = c("name" = "GEOID")) %>% 
+  st_as_sf(coords = c("X", "Y")) %>% 
+  group_by(line_id, commuters) %>%
+  summarise() %>% # union points into lines using our created lineid
+  st_cast("POINT") %>% 
+  st_set_crs(4326)
 ```
 
 ```{r}
-df_lines <- df_lines %>% 
-  st_set_crs(4326)
-
 rivers <- rivers %>% 
   st_set_crs(4326)
 
-df_lines
 rivers
 ```
 
 ```{r}
-df_lines %>% 
+df_linestrings %>% 
+  ggplot() +
+    geom_sf() +
+    geom_sf(data = df_points, color = "red")
+
+
+df_linestrings %>% 
   ggplot() +
     geom_sf(aes(size = commuters,
                 alpha = commuters)) +
+    geom_sf(data = df_points, color = "red") +
     geom_sf(data = rivers,
             aes(color = NAME),
             size = 3) +
     scale_size_continuous(range = c(.1, 1)) +
-    scale_alpha_continuous(range = c(.1, 1))
+    scale_alpha_continuous(range = c(.1, 1)) +
+    theme_void()
 ```
 ```{r}
 #geom_sf is not accepting alpha as an aesthetic
 
-df_lines <- df_lines %>% 
+df_linestrings_intersect <- df_linestrings %>% 
   ungroup() %>% 
   mutate(intersects_ohio = st_intersects(., rivers %>% 
                                             filter(NAME == "Ohio River")) %>% as.logical(),
@@ -250,22 +285,24 @@ df_lines <- df_lines %>%
          intersects_monongahela = st_intersects(., rivers %>% 
                                                   filter(NAME == "Monongahela River")) %>% as.logical())
 
-df_commuter_rivers <- df_lines %>% 
+df_commuter_rivers <- df_linestrings_intersect %>% 
   pivot_longer(c(contains("intersects")), names_to = "river_intersected", values_to = "value") %>% 
   mutate(value = case_when(is.na(value) ~ FALSE,
                            !is.na(value) ~ value))
 
 df_commuter_rivers %>% 
+  filter(value == TRUE) %>% 
   ggplot() +
     geom_sf(data = allegheny_tracts, color = NA, show.legend = FALSE) +
     geom_sf(data = rivers, show.legend = FALSE) +
     geom_sf(aes(geometry = geometry, 
                 color = value,
                 size = commuters),
+            #alpha = .1,
             show.legend = TRUE) +
     facet_wrap(~river_intersected) +
     theme_graph() +
-    scale_size_continuous(range = c(.1, .5))
+    scale_size_continuous(range = c(.1, .1))
 ```
 
 ```{r}
@@ -279,6 +316,8 @@ df_commuter_rivers_summary %>%
     geom_jitter(width = .2) +
     theme_bw()
 ```
+
+## Chloropleth
 
 ```{r}
 #make chloropleth
@@ -305,68 +344,187 @@ df_lines_chloro
 #df_lines_chloro
 ```
 ```{r}
-df_lines_chloro <- df_lines_chloro %>% 
-  left_join(df_nodes, by = c("edge_id" = "id")) %>% 
-  left_join(allegheny_lines, by = c("name" = "GEOID"))
+#df_lines_chloro <- df_lines_chloro %>% 
+#  left_join(df_nodes, by = c("edge_id" = "id")) %>% 
+#  left_join(allegheny_lines, by = c("name" = "GEOID"))
 
-df_lines_chloro_wide <- df_lines_chloro %>% 
-  select(line_id, point_type, name) %>% 
-  pivot_wider(names_from = point_type, values_from = name)
+#df_lines_chloro
 ```
 ```{r}
-df_lines_chloro_line <- df_lines_chloro %>% 
+df_line_types_chloro <- df_lines_chloro %>% 
+  #select(line_id, point_type, edge_id) %>% 
+  pivot_wider(names_from = point_type, values_from = edge_id) %>% 
+  mutate(line_type = case_when(from == to ~ "point",
+                               from != to ~ "linestring")) %>% 
+  pivot_longer(cols = c(from, to), names_to = "edge_type", values_to = "edge_id")
+  
+df_line_types_chloro
+```
+
+```{r}
+df_linestrings_chloro <- df_line_types_chloro %>% 
+  filter(line_type == "linestring")
+
+df_linestrings_chloro_lookup <- df_linestrings_chloro %>% 
+  select(line_id, edge_type, edge_id) %>% 
+  pivot_wider(names_from = edge_type, values_from = edge_id)
+
+df_points_chloro <- df_line_types %>% 
+  filter(line_type == "point")
+```
+
+```{r}
+df_linestrings_chloro <- df_linestrings_chloro %>% 
+  left_join(df_nodes, by = c("edge_id" = "id")) %>% 
+  left_join(allegheny_lines, by = c("name" = "GEOID")) %>% 
   st_as_sf(coords = c("X", "Y")) %>% 
   group_by(line_id, commuters) %>%
   summarise() %>% # union points into lines using our created lineid
-  st_cast("LINESTRING")
+  st_cast("LINESTRING") %>% 
+  st_set_crs(4326) %>% 
+  left_join(df_linestrings_chloro_lookup, by = c("line_id" = "line_id")) %>% 
+  left_join(df_nodes, by = c("from" = "id")) %>% 
+  left_join(allegheny_lines, by = c("name" = "GEOID"))
 
-df_lines_chloro_line
+df_points_chloro <- df_points_chloro %>% 
+  left_join(df_nodes, by = c("edge_id" = "id")) %>% 
+  left_join(allegheny_lines, by = c("name" = "GEOID")) %>% 
+  st_as_sf(coords = c("X", "Y")) %>% 
+  group_by(line_id, name, commuters) %>%
+  summarise() %>% # union points into lines using our created lineid
+  st_cast("POINT") %>% 
+  st_set_crs(4326)
+```
+
+```{r}
+#df_lines_chloro_wide <- df_lines_chloro %>% 
+#  select(line_id, point_type, name) %>% 
+#  pivot_wider(names_from = point_type, values_from = name)
+
+#df_lines_chloro_wide
 ```
 ```{r}
-df_lines_chloro_line <- df_lines_chloro_line %>% 
-  st_set_crs(4326)
+#df_lines_chloro_line <- df_lines_chloro %>% 
+#  st_as_sf(coords = c("X", "Y")) %>% 
+#  group_by(line_id, commuters) %>%
+#  summarise() %>% # union points into lines using our created lineid
+#  st_cast("LINESTRING")
 
+#df_lines_chloro_line
+```
+```{r}
 rivers <- rivers %>% 
   st_set_crs(4326)
 ```
 
 ```{r}
-df_chloro_wide <- df_lines_chloro_line %>% 
+df_linestrings_chloro %>% 
+  ggplot() +
+    geom_sf()
+
+df_points_chloro %>% 
+   ggplot() +
+    geom_sf()
+```
+
+```{r}
+df_linestrings_chloro_intersect <- df_linestrings_chloro %>% 
   ungroup() %>% 
-  left_join(df_lines_chloro_wide) %>% 
+  #left_join(df_lines_chloro_wide) %>% 
   mutate(intersects_ohio = st_intersects(., rivers %>% 
                                             filter(NAME == "Ohio River")) %>% as.logical(),
          intersects_allegheny = st_intersects(., rivers %>% 
                                                 filter(NAME == "Allegheny River")) %>% as.logical(),
          intersects_monongahela = st_intersects(., rivers %>% 
                                                   filter(NAME == "Monongahela River")) %>% as.logical()) %>% 
-  st_set_geometry(NULL)
+  st_set_geometry(NULL) %>% 
+  select(-c(from, to)) %>% 
+  rename(from = name)
 
-df_chloro_wide
+df_linestrings_chloro_intersect
+```
 
-df_chloro_wide <- df_chloro_wide %>% 
-  pivot_longer(c(contains("intersects")), names_to = "river_intersected", values_to = "value") %>% 
-  mutate(value = case_when(is.na(value) ~ FALSE,
-                           !is.na(value) ~ value)) %>% 
-  group_by(from, to, line_id, commuters) %>% 
-  summarize(rivers_intersected = sum(value)) %>% 
-  #arrange(desc(commuters_from)) %>% 
-  right_join(allegheny_tracts, by = c("from" = "GEOID")) #%>% 
-  #filter(!is.na(rivers_intersected))
+```{r}
+df_linestrings_chloro_intersect <- df_linestrings_chloro_intersect %>% 
+  mutate_at(vars(contains("intersect")), ~case_when(is.na(.) ~ FALSE,
+                           !is.na(.) ~ .)) %>%
+  mutate(no_intersect = case_when(intersects_allegheny == FALSE & intersects_monongahela == FALSE & intersects_ohio == FALSE ~ TRUE,
+                                  TRUE ~ FALSE)) %>% 
+  select(line_id, from, 
+         #to, 
+         contains("intersect"), commuters) %>% 
+  pivot_longer(contains("intersect"), names_to = "river_intersected", values_to = "value")
 
-test <- df_chloro_wide %>% 
-  arrange(from, rivers_intersected, desc(commuters)) %>% 
-  group_by(from) %>% 
-  slice(1)
+df_linestrings_chloro_intersect
+```
+
+```{r}
+df_linestrings_chloro_intersect <- df_linestrings_chloro_intersect %>% 
+  mutate(commuters = case_when(value == FALSE ~ 0,
+                               TRUE ~ commuters))
+
+df_linestrings_chloro_intersect
+```
+
+```{r}
+df_linestrings_chloro_intersect %>% 
+  filter(value == TRUE) %>% 
+  add_count(line_id, name = "count_line_id", sort = TRUE)
+```
+```{r}
+df_linestrings_chloro_intersect <- df_linestrings_chloro_intersect %>% 
+  filter(value == TRUE) %>% 
+  group_by(line_id, from, 
+           #to, 
+           commuters) %>% 
+  summarize(count_rivers_intersected = sum(river_intersected != "no_intersect"))
+
+df_linestrings_chloro_intersect
+```
+
+```{r}
+df_points_chloro <- cbind(df_points_chloro, st_coordinates(st_centroid(df_points_chloro))) %>% 
+  st_drop_geometry() %>% 
+  rename(from = name) %>% 
+  select(line_id, from, commuters) %>% 
+  mutate(count_rivers_intersected = 0)
+
+df_points_chloro
+```
+
+```{r}
+df_combined <- bind_rows(df_linestrings_chloro_intersect, df_points_chloro)
+
+df_combined
+```
+
+```{r}
+df_combined %>% 
+  ggplot(aes(count_rivers_intersected, commuters)) +
+    geom_jitter(width = .2, 
+                height = .2,
+                alpha = .5) +
+    scale_x_continuous(breaks = c(0:3)) +
+    theme_bw()
+```
+
+```{r}
+test <- df_combined %>% 
+  arrange(from, desc(count_rivers_intersected), desc(commuters))
 ```
 ```{r}
 test %>% 
+  right_join(allegheny_tracts, by = c("from" = "GEOID")) %>% 
   ggplot() +
     geom_sf(aes(geometry = geometry,
-                fill = as.factor(rivers_intersected),
+                fill = as.factor(count_rivers_intersected),
                 alpha = commuters)) +
+  geom_sf(data = rivers,
+          aes(color = NAME),
+          size = 2) +
   scale_alpha_continuous(range = c(.8, 1)) +
-  scale_fill_viridis_d()
+  scale_fill_viridis_d() +
+  theme_void()
 ```
 
 
