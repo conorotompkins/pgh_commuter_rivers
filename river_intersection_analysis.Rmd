@@ -509,11 +509,11 @@ df_combined %>%
 ```
 
 ```{r}
-test <- df_combined %>% 
+df_combined <- df_combined %>% 
   arrange(from, desc(count_rivers_intersected), desc(commuters))
 ```
 ```{r}
-test %>% 
+df_combined %>% 
   right_join(allegheny_tracts, by = c("from" = "GEOID")) %>% 
   ggplot() +
     geom_sf(aes(geometry = geometry,
@@ -525,6 +525,36 @@ test %>%
   scale_alpha_continuous(range = c(.8, 1)) +
   scale_fill_viridis_d() +
   theme_void()
+```
+
+```{r}
+test <- df_combined %>%
+  ungroup() %>% 
+  group_by(from, count_rivers_intersected) %>% 
+  summarize(total_commuters = sum(commuters)) %>% 
+  ungroup %>% 
+  group_by(from) %>% 
+  mutate(pct_of_commuters = total_commuters / sum(total_commuters)) %>% 
+  ungroup() %>% 
+  right_join(allegheny_tracts %>% select(GEOID) %>% st_set_geometry(NULL), by = c("from" = "GEOID")) %>% 
+  complete(from, count_rivers_intersected = c(0, 1, 2)) %>%
+  filter(!is.na(count_rivers_intersected)) %>% 
+  replace_na(list(pct_of_commuters = 0, total_commuters = 0)) %>% 
+  right_join(allegheny_tracts, by = c("from" = "GEOID"))
+  
+test %>% 
+  mutate(count_rivers_intersected = str_c("Rivers intersected:", count_rivers_intersected, sep = " ")) %>% 
+  ggplot() +
+    geom_sf(aes(geometry = geometry,
+                fill = pct_of_commuters),
+            color = NA) +
+    geom_sf(data = rivers,
+            aes(color = NAME),
+            size = 2,
+            show.legend = FALSE) +
+    facet_wrap(~count_rivers_intersected) +
+    scale_fill_viridis_c() +
+    theme_void()
 ```
 
 
