@@ -549,8 +549,8 @@ test %>%
                 fill = pct_of_commuters),
             color = NA) +
     geom_sf(data = rivers,
-            aes(color = NAME),
-            size = 2,
+            color = "white",
+            size = 1,
             show.legend = FALSE) +
     facet_wrap(~count_rivers_intersected) +
     scale_fill_viridis_c() +
