@@ -11,7 +11,16 @@ output:
 
 For many reasons, I presume. This post focuses on how many rivers Pittsburghers cross to get to work. I use the U.S. Census Bureau LEHD Origin-Destination Employment Statistics (LODES) [dataset](https://lehd.ces.census.gov/data/) to draw lines between "home" census tracts and "work" census tracts, and then count how many "commuter lines" intersect with the 3 main rivers in Pittsburgh. This calculation is done in straight lines "as the crow flies", not accounting for actual road routes.
 
-I use the "pa_od_aux_JT00_2017.csv" file as shown here: [LODES screenshot](screenshot.png)
+## TLDR
+A plurality of commuters don't cross any rivers, and none cross three.
+![bar chart](images/bar_chart.png)
+
+Many commuters in the Golden Triangle and neighborhoods to the east don't cross rivers to get to work. Commuters from the North and South Hills areas usually cross one river. Commuters from Sewickley, Coraopolis, and those that live close to the airport are most likely to cross two rivers.
+![faceted graph](images/faceted_graph.png)
+
+## Data munging and analysis
+
+I use the "pa_od_aux_JT00_2017.csv" file as shown here: ![LODES screenshot](images/lodes_screenshot.png)
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE,
@@ -21,7 +30,7 @@ knitr::opts_chunk$set(echo = TRUE,
 options(scipen = 99, digits = 2)
 ```
 
-In my analysis I use many of the standard tidyverse packages, sf, tidygraph, and ggraph:
+In my analysis I use many of the standard `{tidyverse}` packages, `{sf}`, `{tidycensus}`, `{tidygraph}`, and `{ggraph}`:
 ```{r}
 library(tidyverse)
 library(vroom)
@@ -166,28 +175,28 @@ manual_layout %>%
 ```
 
 This graphs the commuter lines on top of the census tracts and rivers:
-```{r}
+```{r fig.height=8, fig.width=8}
 ggraph(manual_layout) +
   geom_sf(data = allegheny_tracts, color = "dark grey", fill = NA) +
   geom_sf(data = rivers, aes(color = NAME), show.legend = FALSE) +
-  geom_edge_fan(aes(edge_width = commuters, 
-                    edge_alpha = commuters),
+  geom_edge_fan(aes(edge_width = log10(commuters), 
+                    edge_alpha = log10(commuters)),
                 arrow = arrow(length = unit(.5, 'lines')), 
                 start_cap = circle(.1, 'lines'),
                 end_cap = circle(.2, 'lines'),
                 color = "white",
                 strength = .5) +
-  scale_edge_width_continuous(range = c(.1, 1.5)) +
-  scale_edge_alpha_continuous(range = c(.01, .5)) +
+  scale_edge_width_continuous(range = c(.1, 1)) +
+  scale_edge_alpha_continuous(range = c(.01, .4)) +
   labs(x = NULL,
        y = NULL,
        title = "Where do people commute from/to for work?",
        subtitle = "Excludes within-tract commuters",
        caption = "Based on 2017 US Census LODES dataset | @conor_tompkins") +
   theme_graph() +
-  theme(legend.background = element_rect(fill = "light grey"),
-        legend.text = element_text(color = "black"),
-        legend.title = element_text(color = "black"),
+  theme(legend.background = element_rect(fill = "black"),
+        legend.text = element_text(color = "white"),
+        legend.title = element_text(color = "white"),
         panel.background = element_rect(fill = "black"))
 ```
 
@@ -227,7 +236,6 @@ df_lines
 Since some commuter "lines" are really just points that start and end at the same centroid, I separate the commuter "lines" from the "points" for purposes of manipulating the geometries.
 ```{r}
 df_line_types <- df_lines %>% 
-  #select(line_id, point_type, edge_id) %>% 
   pivot_wider(names_from = point_type, values_from = edge_id) %>% 
   mutate(line_type = case_when(from == to ~ "point",
                                from != to ~ "linestring")) %>% 
@@ -344,10 +352,15 @@ df_commuter_rivers_summary %>%
   ggplot(aes(rivers_crossed, commuters)) +
     geom_col() +
     scale_y_continuous(labels = scales::comma) +
+    labs(title = "Commuter travel patterns",
+         subtitle = "2017 U.S. Census LODES dataset",
+         x = "Rivers crossed",
+         y = "Number of commuters",
+         caption = "@conor_tompkins") +
     theme_bw()
 ```
 
-It is always reasurring when your analysis doesn't stray to far from conventional wisdom. Very few Pittsburghers in the dataset cross two rivers to get to work, and none cross three.
+It is always reassuring when your analysis doesn't stray to far from conventional wisdom. Very few Pittsburghers in the dataset cross two rivers to get to work, and none cross three.
 
 ## Mapping commuter patterns
 
@@ -412,16 +425,6 @@ df_points_chloro <- df_points_chloro %>%
 #  st_set_crs(4326)
 ```
 
-```{r eval=FALSE, include=FALSE}
-##df_linestrings_chloro %>% 
-##  ggplot() +
-##    geom_sf()
-
-##df_points_chloro %>% 
-##   ggplot() +
-##    geom_sf()
-```
-
 ```{r}
 df_linestrings_chloro_intersect <- df_linestrings_chloro %>% 
   ungroup() %>% 
@@ -455,11 +458,6 @@ df_linestrings_chloro_intersect <- df_linestrings_chloro_intersect %>%
                                TRUE ~ commuters))
 ```
 
-```{r eval=FALSE, include=FALSE}
-#df_linestrings_chloro_intersect %>% 
-#  filter(value == TRUE) %>% 
-#  add_count(line_id, name = "count_line_id", sort = TRUE)
-```
 ```{r}
 df_linestrings_chloro_intersect <- df_linestrings_chloro_intersect %>% 
   filter(value == TRUE) %>% 
@@ -545,7 +543,7 @@ df_chloro_map <- df_chloro_map %>%
 glimpse(df_chloro_map)
 ```
 
-```{r}
+```{r fig.height=5, fig.width=10}
 df_chloro_map %>% 
   mutate(count_rivers_intersected = str_c("Rivers intersected:", count_rivers_intersected, sep = " ")) %>% 
   ggplot() +
@@ -554,14 +552,15 @@ df_chloro_map %>%
             color = NA) +
     geom_sf(data = rivers,
             aes(color = NAME),
-            #color = "white",
             size = 1,
             show.legend = FALSE) +
     facet_wrap(~count_rivers_intersected,
-               ncol = 1) +
-    #guides(fill = guide_legend(title.position = "bottom")) +
+               nrow = 1) +
     scale_fill_viridis_c("% of commuters",
                          labels = scales::percent) +
+    labs(title = "Commuter travel patterns",
+         subtitle = "2017 U.S. Census LODES dataset",
+         caption = "@conor_tompkins") +
     theme_void()
 ```
 
