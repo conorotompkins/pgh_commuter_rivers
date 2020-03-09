@@ -346,11 +346,12 @@ df_commuter_rivers_summary <- df_commuter_rivers %>%
   summarize(rivers_crossed = sum(value),
             commuters = sum(commuters))
 
-df_commuter_rivers_summary %>% 
+plot_bar <- df_commuter_rivers_summary %>% 
   group_by(rivers_crossed) %>% 
   summarize(commuters = sum(commuters)) %>% 
   ggplot(aes(rivers_crossed, commuters)) +
-    geom_col() +
+    geom_col(color = "black") +
+    geom_text(aes(y = commuters + 8000, label = scales::comma(commuters))) +
     scale_y_continuous(labels = scales::comma) +
     labs(title = "Commuter travel patterns",
          subtitle = "2017 U.S. Census LODES dataset",
@@ -358,6 +359,11 @@ df_commuter_rivers_summary %>%
          y = "Number of commuters",
          caption = "@conor_tompkins") +
     theme_bw()
+
+plot_bar
+
+ggsave(plot = plot_bar, filename = "output/high_resolution_bar_chart.png", device = "png",
+         width = 9, height = 9, dpi = 300)
 ```
 
 It is always reassuring when your analysis doesn't stray to far from conventional wisdom. Very few Pittsburghers in the dataset cross two rivers to get to work, and none cross three.
